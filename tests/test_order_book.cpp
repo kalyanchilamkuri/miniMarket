@@ -111,3 +111,53 @@ TEST_F(OrderBookTest, EmptyBookSafeHandling) {
     // Cancel non-existent order
     EXPECT_FALSE(book.cancelOrder(999));
 }
+
+// Regression Test 6: Rejection of duplicate OrderId
+TEST_F(OrderBookTest, RejectDuplicateOrderId) {
+    auto t1 = book.addLimitOrder(10, "Trader1", Side::Buy, 100, 10, 1);
+    EXPECT_TRUE(book.hasOrder(10));
+    EXPECT_EQ(book.bestBidQty(), 10);
+
+    // Attempting to submit another order with identical ID 10
+    auto t2 = book.addLimitOrder(10, "Trader2", Side::Buy, 105, 20, 2);
+    EXPECT_TRUE(t2.empty());
+    // Original order unchanged
+    EXPECT_EQ(book.bestBid(), 100);
+    EXPECT_EQ(book.bestBidQty(), 10);
+}
+
+// Regression Test 7: Rejection of zero or negative limit prices
+TEST_F(OrderBookTest, RejectInvalidLimitPrice) {
+    auto t1 = book.addLimitOrder(1, "Trader", Side::Buy, 0, 10, 1);
+    EXPECT_TRUE(t1.empty());
+    EXPECT_FALSE(book.hasOrder(1));
+
+    auto t2 = book.addLimitOrder(2, "Trader", Side::Sell, -50, 10, 2);
+    EXPECT_TRUE(t2.empty());
+    EXPECT_FALSE(book.hasOrder(2));
+}
+
+// Regression Test 8: Query best bid/ask excluding specific client (own quotes)
+TEST_F(OrderBookTest, ExcludeClientQueries) {
+    // Strategy places aggressive bid at 102
+    book.addLimitOrder(1, "STRATEGY", Side::Buy, 102, 10, 1);
+    // External trader places bid at 100
+    book.addLimitOrder(2, "EXT_TRADER", Side::Buy, 100, 20, 2);
+
+    // Overall best bid is 102
+    EXPECT_EQ(book.bestBid(), 102);
+    // Best bid excluding STRATEGY is 100
+    EXPECT_EQ(book.bestBid("STRATEGY"), 100);
+    EXPECT_EQ(book.bestBidQty("STRATEGY"), 20);
+
+    // Same for Ask
+    book.addLimitOrder(3, "STRATEGY", Side::Sell, 104, 10, 3);
+    book.addLimitOrder(4, "EXT_TRADER", Side::Sell, 106, 15, 4);
+
+    EXPECT_EQ(book.bestAsk(), 104);
+    EXPECT_EQ(book.bestAsk("STRATEGY"), 106);
+    EXPECT_EQ(book.bestAskQty("STRATEGY"), 15);
+
+    // Mid price excluding STRATEGY: (100 + 106) / 2 = 103.0
+    EXPECT_EQ(book.midPrice("STRATEGY"), 103.0);
+}

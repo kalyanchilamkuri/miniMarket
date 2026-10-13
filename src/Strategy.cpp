@@ -71,7 +71,12 @@ std::vector<StrategyAction> MarketMakingStrategy::onMarketUpdate(const OrderBook
                                                                 OrderId& next_order_id) {
     std::vector<StrategyAction> actions;
 
-    auto opt_mid = book.midPrice();
+    // Midpoint observation: anchor to external market liquidity (excluding own quotes)
+    // to avoid self-referential midpoint bias and quote sticking
+    auto opt_mid = book.midPrice(config_.client_id);
+    if (!opt_mid.has_value()) {
+        opt_mid = book.midPrice();
+    }
     if (!opt_mid.has_value()) {
         // No observable midpoint from both sides of the book
         return actions;
@@ -82,7 +87,7 @@ std::vector<StrategyAction> MarketMakingStrategy::onMarketUpdate(const OrderBook
 
     Quantity q = portfolio_.position();
 
-    // Avellaneda-Stoikov inventory skew:
+    // Simplified linear inventory-skew heuristic (inspired by the Avellaneda-Stoikov reservation price principle):
     // Reservation price shifts down if long (q > 0) to encourage selling,
     // and shifts up if short (q < 0) to encourage buying.
     double reservation_price = mid - (config_.inventory_skew_gamma * static_cast<double>(q));
@@ -90,23 +95,21 @@ std::vector<StrategyAction> MarketMakingStrategy::onMarketUpdate(const OrderBook
     Price desired_bid = static_cast<Price>(std::floor(reservation_price - static_cast<double>(config_.half_spread)));
     Price desired_ask = static_cast<Price>(std::ceil(reservation_price + static_cast<double>(config_.half_spread)));
 
-    // Ensure valid spread
-    if (desired_bid >= desired_ask) {
-        desired_ask = desired_bid + 1;
-    }
-
-    // Passive liquidity maker rules: avoid crossing current external best quotes
-    if (auto bb = book.bestBid()) {
-        // Avoid ask below or at best bid (unless quoting at best bid + 1)
+    // Passive liquidity maker rules: avoid crossing external best quotes
+    if (auto bb = book.bestBid(config_.client_id)) {
         if (desired_ask <= *bb) {
             desired_ask = *bb + 1;
         }
     }
-    if (auto ba = book.bestAsk()) {
-        // Avoid bid above or at best ask
+    if (auto ba = book.bestAsk(config_.client_id)) {
         if (desired_bid >= *ba) {
             desired_bid = *ba - 1;
         }
+    }
+
+    // Enforce strictly positive spread (desired_bid < desired_ask) after all clipping
+    if (desired_bid >= desired_ask) {
+        desired_ask = desired_bid + 1;
     }
 
     // 1. Evaluate Buy Side (Inventory Limit check)

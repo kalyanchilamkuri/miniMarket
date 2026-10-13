@@ -37,13 +37,13 @@ public:
                                       Timestamp timestamp);
     bool cancelOrder(OrderId id);
 
-    // Book State Queries
-    std::optional<Price> bestBid() const;
-    std::optional<Price> bestAsk() const;
-    std::optional<Quantity> bestBidQty() const;
-    std::optional<Quantity> bestAskQty() const;
-    std::optional<double> midPrice() const;
-    std::optional<Price> spread() const;
+    // Book State Queries (supports excluding specific client, e.g. own strategy quotes)
+    std::optional<Price> bestBid(const std::string& exclude_client = "") const;
+    std::optional<Price> bestAsk(const std::string& exclude_client = "") const;
+    std::optional<Quantity> bestBidQty(const std::string& exclude_client = "") const;
+    std::optional<Quantity> bestAskQty(const std::string& exclude_client = "") const;
+    std::optional<double> midPrice(const std::string& exclude_client = "") const;
+    std::optional<Price> spread(const std::string& exclude_client = "") const;
 
     BookSnapshot getSnapshot(Timestamp timestamp) const;
     std::vector<LevelInfo> getBidDepth(size_t max_levels = 5) const;

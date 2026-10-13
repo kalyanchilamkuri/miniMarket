@@ -100,6 +100,40 @@ TEST_F(StrategyTest, EnforcesInventoryLimitHardCap) {
     EXPECT_TRUE(strategy.activeAskId().has_value());
 }
 
+// Regression Test: Strict positive spread (desired_bid < desired_ask) after clipping
+TEST_F(StrategyTest, PostClippingSpreadPreserved) {
+    // Tight 1-tick external spread: bid 100, ask 101
+    book.addLimitOrder(1, "EXT", Side::Buy, 100, 10, 1);
+    book.addLimitOrder(2, "EXT", Side::Sell, 101, 10, 1);
+
+    OrderId next_id = 500;
+    auto actions = strategy.onMarketUpdate(book, 1, next_id);
+
+    ASSERT_TRUE(strategy.activeBidPrice().has_value());
+    ASSERT_TRUE(strategy.activeAskPrice().has_value());
+    EXPECT_LT(*strategy.activeBidPrice(), *strategy.activeAskPrice());
+}
+
+// Regression Test: Own quotes are excluded from midpoint observation
+TEST_F(StrategyTest, ExcludeOwnQuotesFromMidpointObservation) {
+    // External market is wide: bid 90, ask 110 (external mid = 100)
+    book.addLimitOrder(1, "EXT", Side::Buy, 90, 10, 1);
+    book.addLimitOrder(2, "EXT", Side::Sell, 110, 10, 1);
+
+    // Strategy places passive bid at 96 and ask at 104
+    book.addLimitOrder(10, "STRATEGY", Side::Buy, 96, 5, 2);
+    book.addLimitOrder(11, "STRATEGY", Side::Sell, 104, 5, 2);
+
+    OrderId next_id = 600;
+    // Calling onMarketUpdate should base reservation price on external mid 100, NOT self-polluted mid
+    auto actions = strategy.onMarketUpdate(book, 3, next_id);
+
+    // Strategy reservation price when flat must be 100
+    // desired_bid = 100 - 2 = 98, desired_ask = 100 + 2 = 102
+    EXPECT_EQ(strategy.activeBidPrice(), 98);
+    EXPECT_EQ(strategy.activeAskPrice(), 102);
+}
+
 // Test: Simulator reproducibility with identical seed
 TEST(SimulationReproducibilityTest, SameSeedProducesIdenticalResults) {
     SimulationConfig config1;

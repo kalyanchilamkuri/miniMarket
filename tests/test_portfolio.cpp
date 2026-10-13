@@ -86,3 +86,15 @@ TEST_F(PortfolioTest, ShortPositionAccounting) {
     EXPECT_DOUBLE_EQ(portfolio.equity(110.0), 99895.0);
     EXPECT_DOUBLE_EQ(portfolio.netPnL(110.0), -105.0);
 }
+
+// Regression Test: Reset resets position, cash, fees, and mark price
+TEST_F(PortfolioTest, ResetResetsMarkPrice) {
+    portfolio.onTrade(Side::Buy, 150, 10);
+    EXPECT_DOUBLE_EQ(portfolio.lastMarkPrice(), 150.0);
+
+    portfolio.reset(100.0);
+    EXPECT_EQ(portfolio.position(), 0);
+    EXPECT_DOUBLE_EQ(portfolio.cash(), 100000.0);
+    EXPECT_DOUBLE_EQ(portfolio.cumulativeFees(), 0.0);
+    EXPECT_DOUBLE_EQ(portfolio.lastMarkPrice(), 100.0);
+}

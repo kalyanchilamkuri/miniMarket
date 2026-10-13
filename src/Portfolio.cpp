@@ -6,13 +6,14 @@ Portfolio::Portfolio(Config config)
     : config_(config),
       cash_(config.initial_cash) {}
 
-void Portfolio::reset() {
+void Portfolio::reset(double initial_mark_price) {
     cash_ = config_.initial_cash;
     position_ = 0;
     cumulative_fees_ = 0.0;
     trade_count_ = 0;
     total_bought_volume_ = 0;
     total_sold_volume_ = 0;
+    last_mark_price_ = initial_mark_price;
 }
 
 void Portfolio::onTrade(Side side, Price price, Quantity qty) {

@@ -16,6 +16,13 @@ std::vector<Trade> OrderBook::addOrder(const Order& order) {
     if (order.openQty() <= 0) {
         return {};
     }
+    if (order.type() == OrderType::Limit && order.price() <= 0) {
+        return {};
+    }
+    if (order_map_.find(order.id()) != order_map_.end()) {
+        // Reject duplicate OrderId
+        return {};
+    }
 
     if (order.type() == OrderType::Limit) {
         if (order.side() == Side::Buy) {
@@ -282,38 +289,74 @@ bool OrderBook::cancelOrder(OrderId id) {
     return true;
 }
 
-std::optional<Price> OrderBook::bestBid() const {
+std::optional<Price> OrderBook::bestBid(const std::string& exclude_client) const {
     if (bids_.empty()) return std::nullopt;
-    return bids_.begin()->first;
+    if (exclude_client.empty()) return bids_.begin()->first;
+    for (const auto& [price, level] : bids_) {
+        for (const auto& order : level.orders) {
+            if (order.clientId() != exclude_client) {
+                return price;
+            }
+        }
+    }
+    return std::nullopt;
 }
 
-std::optional<Price> OrderBook::bestAsk() const {
+std::optional<Price> OrderBook::bestAsk(const std::string& exclude_client) const {
     if (asks_.empty()) return std::nullopt;
-    return asks_.begin()->first;
+    if (exclude_client.empty()) return asks_.begin()->first;
+    for (const auto& [price, level] : asks_) {
+        for (const auto& order : level.orders) {
+            if (order.clientId() != exclude_client) {
+                return price;
+            }
+        }
+    }
+    return std::nullopt;
 }
 
-std::optional<Quantity> OrderBook::bestBidQty() const {
+std::optional<Quantity> OrderBook::bestBidQty(const std::string& exclude_client) const {
     if (bids_.empty()) return std::nullopt;
-    return bids_.begin()->second.total_volume;
+    if (exclude_client.empty()) return bids_.begin()->second.total_volume;
+    for (const auto& [price, level] : bids_) {
+        Quantity vol = 0;
+        for (const auto& order : level.orders) {
+            if (order.clientId() != exclude_client) {
+                vol += order.openQty();
+            }
+        }
+        if (vol > 0) return vol;
+    }
+    return std::nullopt;
 }
 
-std::optional<Quantity> OrderBook::bestAskQty() const {
+std::optional<Quantity> OrderBook::bestAskQty(const std::string& exclude_client) const {
     if (asks_.empty()) return std::nullopt;
-    return asks_.begin()->second.total_volume;
+    if (exclude_client.empty()) return asks_.begin()->second.total_volume;
+    for (const auto& [price, level] : asks_) {
+        Quantity vol = 0;
+        for (const auto& order : level.orders) {
+            if (order.clientId() != exclude_client) {
+                vol += order.openQty();
+            }
+        }
+        if (vol > 0) return vol;
+    }
+    return std::nullopt;
 }
 
-std::optional<double> OrderBook::midPrice() const {
-    auto bb = bestBid();
-    auto ba = bestAsk();
+std::optional<double> OrderBook::midPrice(const std::string& exclude_client) const {
+    auto bb = bestBid(exclude_client);
+    auto ba = bestAsk(exclude_client);
     if (bb && ba) {
         return (*bb + *ba) / 2.0;
     }
     return std::nullopt;
 }
 
-std::optional<Price> OrderBook::spread() const {
-    auto bb = bestBid();
-    auto ba = bestAsk();
+std::optional<Price> OrderBook::spread(const std::string& exclude_client) const {
+    auto bb = bestBid(exclude_client);
+    auto ba = bestAsk(exclude_client);
     if (bb && ba) {
         return *ba - *bb;
     }

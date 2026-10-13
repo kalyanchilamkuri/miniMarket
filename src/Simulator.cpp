@@ -77,6 +77,7 @@ void Simulator::takeSnapshot() {
     record.strategy_equity = port.equity(mid);
     record.strategy_pnl = port.netPnL(mid);
     record.cumulative_fees = port.cumulativeFees();
+    record.strategy_fill_ratio = strategy_.fillRatio();
 
     snapshots_.push_back(record);
 }
@@ -84,6 +85,7 @@ void Simulator::takeSnapshot() {
 SimulationStats Simulator::run() {
     book_.clear();
     strategy_.reset();
+    strategy_.portfolio().reset(config_.initial_reference_price);
     all_trades_.clear();
     snapshots_.clear();
     active_external_orders_.clear();

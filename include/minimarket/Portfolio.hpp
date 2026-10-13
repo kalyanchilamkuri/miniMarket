@@ -17,7 +17,7 @@ public:
 
     explicit Portfolio(PortfolioConfig config = PortfolioConfig());
 
-    void reset();
+    void reset(double initial_mark_price = 10000.0);
 
     // Process a trade fill where this portfolio is either the buyer or seller
     void onTrade(Side side, Price price, Quantity qty);
