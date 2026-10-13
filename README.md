@@ -101,7 +101,9 @@ where $\gamma$ is a configured inventory risk sensitivity parameter:
 > 3. Quoting spreads use a configurable tick half-spread $s$ with passive liquidity clipping, avoiding numerical intensity fitting.
 
 ### 2. Quoting Equations & Midpoint Anchoring
-To avoid self-referential feedback loops and quote sticking, the strategy queries the order book **excluding its own client ID** (`book.midPrice("STRATEGY")`, `book.bestBid("STRATEGY")`, `book.bestAsk("STRATEGY")`).
+To avoid self-referential feedback loops and quote sticking, the strategy queries the order book **strictly excluding its own client ID** (`book.midPrice("STRATEGY")`, `book.bestBid("STRATEGY")`, `book.bestAsk("STRATEGY")`).
+
+- **Midpoint Fallback**: If external two-sided liquidity is temporarily unavailable, the strategy uses `last_valid_external_mid_`. If no external midpoint has ever been observed, the strategy refrains from quoting and cancels any active quotes. The strategy **never** uses its own quotes as an external midpoint reference.
 
 Given a target half-spread $s$:
 
@@ -115,6 +117,11 @@ The strategy enforces a hard inventory ceiling $Q_{\max}$:
 - Maximum allowable sell quantity: $\text{sell\_size} = \min(Q_{\text{quote}}, \max(0, Q_{\max} + q))$
 - If $q \ge Q_{\max}$, all buy quotes are cancelled and suppressed.
 - If $q \le -Q_{\max}$, all sell quotes are cancelled and suppressed.
+
+### 4. Self-Trade Prevention (STP) & Two-Pass Quote Execution
+To eliminate wash trading and ensure portfolio accounting integrity:
+1. **Two-Pass Execution in Simulator**: When refreshing quotes, the simulator processes all `Cancel` actions in Pass 1 before placing any new orders in Pass 2. This guarantees that stale resting quotes are purged before new quotes are sent to the book.
+2. **Matching Engine STP Policy (Cancel Resting)**: If an incoming limit or market order would match against a resting order with the same non-empty `clientId`, the engine cancels the resting order from the book rather than executing a wash trade, preserving the incoming order and continuing matching.
 
 ---
 
@@ -132,48 +139,57 @@ The strategy enforces a hard inventory ceiling $Q_{\max}$:
    - Sell fill: $q \leftarrow q - Q$
 
 3. **Mark-to-Market Valuation**:
-   Given mark price $P_{\text{mark}}$ (the current external order book midpoint, falling back to the last traded price if the book is one-sided):
+   Given mark price $P_{\text{mark}}$ (the current external order book midpoint, falling back to the last mark price if the book is one-sided):
    $$\text{Equity} = \text{Cash} + q \cdot P_{\text{mark}}$$
    $$\text{Net MTM P\&L} = \text{Equity} - \text{Initial Cash}$$
 
-Transaction fees are deducted directly from cash on each fill, ensuring all fees are fully reflected in net P&L and total equity.
+4. **Continuous Event-Level Risk Tracking**:
+   The simulator continuously evaluates maximum absolute inventory $\max |q|$ and peak-to-trough equity drawdown at every discrete event step, ensuring intra-snapshot peak exposures are fully captured.
 
 ---
 
 ## Build and Run Instructions
 
 ### Prerequisites
-- C++17 compatible compiler (e.g., GCC 9+, Clang 10+, or MSVC 2019+)
+- C++17 compatible compiler (GCC 9+, Clang 10+, or MSVC 2019+)
 - CMake 3.16+
 - Python 3.8+ with `pandas` and `matplotlib`
 
 ### 1. Build Core and Test Suite
 ```bash
 # Configure build with CMake
-cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake -B build -DCMAKE_BUILD_TYPE=Release
 
 # Build both the CLI and test binaries
 cmake --build build
 ```
 
 ### 2. Run Test Suites
-Run all **25 GoogleTest unit tests**:
+**GoogleTest Suite (31 unit & regression tests)**:
 ```bash
-./build/minimarket_tests.exe
+# Linux / macOS:
+./build/minimarket_tests
+
+# Windows (PowerShell / CMD):
+.\build\minimarket_tests.exe
 ```
 Or via CTest:
 ```bash
 ctest --test-dir build --output-on-failure
 ```
-Run Python analysis tests:
+
+**Python Analysis Unit Tests (4 tests)**:
 ```bash
 python -m unittest tests/test_analyze.py
 ```
 
 ### 3. Run Simulation
 ```bash
-# Run 5,000 discrete simulation events with seed 42
-./build/minimarket_cli.exe --seed 42 --events 5000 --out results
+# Linux / macOS:
+./build/minimarket_cli --seed 42 --events 5000 --out results
+
+# Windows:
+.\build\minimarket_cli.exe --seed 42 --events 5000 --out results
 
 # Optional CLI flags:
 #   --seed <int>          Random seed for reproducibility (default: 42)
@@ -211,15 +227,17 @@ Running simulation...
 Simulation completed successfully!
 --------------------------------------------------------
 Summary Performance Metrics:
-  Total Market Trades: 3760
-  Strategy Fills     : 376
-  Strategy Fill Ratio: 22.26%
-  Bought Volume      : 1306 shares
-  Sold Volume        : 1317 shares
-  Final Inventory    : -11 shares (limit: 50)
-  Cumulative Fees    : $2.62 (262.30 cents)
-  Final Net P&L      : $39.27 (3927.20 cents)
-  Final Total Equity : $100039.27
+  Total Market Trades: 2363
+  Strategy Fills     : 38
+  Strategy Fill Ratio: 2.45%
+  Bought Volume      : 132 shares
+  Sold Volume        : 131 shares
+  Final Inventory    : 1 shares (limit: 50)
+  Max Abs Inventory  : 12 shares (limit: 50)
+  Max Drawdown       : $0.85 (85.40 cents)
+  Cumulative Fees    : $0.26 (26.30 cents)
+  Final Net P&L      : $1.87 (187.20 cents)
+  Final Total Equity : $100001.87
 --------------------------------------------------------
 CSV datasets exported to: results/
   -> results/trades.csv
@@ -229,23 +247,24 @@ CSV datasets exported to: results/
 
 ### Quantitative Metrics from Python Analysis
 - **Initial Portfolio Equity**: $\$100,000.00$
-- **Final Portfolio Equity**: $\$100,039.27$
-- **Net Mark-to-Market P&L**: $+\$39.27$ ($+3,927.2\text{ cents}$)
-- **Cumulative Fees Deducted**: $\$2.62$
-- **Total Trades on Market**: $3,760$
-- **Strategy Executions**: $376$ ($195$ buys, $181$ sells)
-- **Strategy Volume**: $1,306$ shares bought, $1,317$ shares sold
-- **Strategy Fill Ratio**: $22.26\%$ (Volume Filled / Volume Quoted)
-- **Max Absolute Inventory**: $50$ shares (strictly bounded at the $50$ share limit)
-- **Max Peak-to-Trough Drawdown**: $\$4.52$ ($0.0045\%$)
+- **Final Portfolio Equity**: $\$100,001.87$
+- **Net Mark-to-Market P&L**: $+\$1.87$ ($+187.2\text{ cents}$)
+- **Cumulative Fees Deducted**: $\$0.26$ ($26.3\text{ cents}$)
+- **Total Trades on Market**: $2,363$
+- **Strategy Executions**: $38$ ($19$ buys, $19$ sells)
+- **Strategy Volume**: $132$ shares bought, $131$ shares sold
+- **Strategy Fill Ratio**: $2.45\%$ (Volume Filled / Volume Quoted)
+- **Max Absolute Inventory**: $12$ shares continuous / $10$ shares snapshot-sampled (strictly bounded at $50$ share limit)
+- **Max Peak-to-Trough Drawdown**: $\$0.85$ ($0.0009\%$)
+- **Wash / Self-Trades Executed**: **$0$** (verified via `trades.csv` and regression tests)
 
 ---
 
 ## Unit Test Coverage Summary
 
-### GoogleTest Suite (25 Tests, 100% Passing)
-1. `OrderBookTest.PricePriorityBuy` — Verifies highest bid executes first against an incoming sell.
-2. `OrderBookTest.PricePrioritySell` — Verifies lowest ask executes first against an incoming buy.
+### GoogleTest Suite (31 Tests, 100% Passing)
+1. `OrderBookTest.PricePriorityBuy` — Verifies highest bid executes first against incoming sell.
+2. `OrderBookTest.PricePrioritySell` — Verifies lowest ask executes first against incoming buy.
 3. `OrderBookTest.TimePriorityFIFO` — Verifies older orders execute first at identical price.
 4. `OrderBookTest.CancellationRemovesOrder` — Verifies $O(1)$ queue removal and level pruning.
 5. `OrderBookTest.EmptyBookSafeHandling` — Verifies empty order books never crash on market orders.
@@ -257,23 +276,30 @@ CSV datasets exported to: results/
 11. `MatchingTest.MultiLevelSweepAndRestingRemainder` — Verifies multi-level sweeps and rests remainder.
 12. `MatchingTest.MarketOrderBehavior` — Verifies market order sweeps liquidity and drops remainder.
 13. `MatchingTest.FilledOrderCannotBeFilledAgain` — Verifies fully filled orders cannot be refilled or cancelled.
-14. `PortfolioTest.InitialState` — Verifies clean initial cash, zero position, zero fees.
-15. `PortfolioTest.BuyAccounting` — Verifies cash reduction, position addition, and fee deduction.
-16. `PortfolioTest.RoundTripRealizedPnL` — Verifies realized P&L on buy-then-sell round trips.
-17. `PortfolioTest.ShortPositionAccounting` — Verifies short position mark-to-market mechanics.
-18. `PortfolioTest.ResetResetsMarkPrice` — Verifies resetting portfolio restores initial mark price.
-19. `StrategyTest.QuotingWhenFlat` — Verifies symmetrical midpoint quoting when inventory is zero.
-20. `StrategyTest.InventorySkewWhenLong` — Verifies downward quote skew when inventory is positive.
-21. `StrategyTest.InventorySkewWhenShort` — Verifies upward quote skew when inventory is negative.
-22. `StrategyTest.EnforcesInventoryLimitHardCap` — Verifies buy quotes are eliminated at $+Q_{\max}$.
-23. `StrategyTest.PostClippingSpreadPreserved` — Verifies strictly positive spread ($P_{\text{bid}} < P_{\text{ask}}$) after clipping.
-24. `StrategyTest.ExcludeOwnQuotesFromMidpointObservation` — Verifies strategy does not observe its own quotes in midpoint.
-25. `SimulationReproducibilityTest.SameSeedProducesIdenticalResults` — Verifies identical seeds yield bitwise identical trades and P&L.
+14. `MatchingTest.SelfTradePreventionCancelRestingLimitBuy` — Verifies STP Cancel Resting policy on incoming limit buy.
+15. `MatchingTest.SelfTradePreventionCancelRestingLimitSell` — Verifies STP Cancel Resting policy on incoming limit sell.
+16. `MatchingTest.SelfTradePreventionCancelRestingMarketOrder` — Verifies STP Cancel Resting policy on incoming market order.
+17. `PortfolioTest.InitialState` — Verifies clean initial cash, zero position, zero fees.
+18. `PortfolioTest.BuyAccounting` — Verifies cash reduction, position addition, and fee deduction.
+19. `PortfolioTest.RoundTripRealizedPnL` — Verifies realized P&L on buy-then-sell round trips.
+20. `PortfolioTest.ShortPositionAccounting` — Verifies short position mark-to-market mechanics.
+21. `PortfolioTest.ResetResetsMarkPrice` — Verifies resetting portfolio restores initial mark price.
+22. `StrategyTest.QuotingWhenFlat` — Verifies symmetrical midpoint quoting when inventory is zero.
+23. `StrategyTest.InventorySkewWhenLong` — Verifies downward quote skew when inventory is positive.
+24. `StrategyTest.InventorySkewWhenShort` — Verifies upward quote skew when inventory is negative.
+25. `StrategyTest.EnforcesInventoryLimitHardCap` — Verifies buy quotes are eliminated at $+Q_{\max}$.
+26. `StrategyTest.PostClippingSpreadPreserved` — Verifies strictly positive spread ($P_{\text{bid}} < P_{\text{ask}}$) after clipping.
+27. `StrategyTest.ExcludeOwnQuotesFromMidpointObservation` — Verifies strategy does not observe its own quotes in midpoint.
+28. `SimulationReproducibilityTest.SameSeedProducesIdenticalResults` — Verifies identical seeds yield bitwise identical trades and P&L.
+29. `StrategyMidpointFallbackTest.FallbackToLastValidExternalMidOrRefrain` — Verifies fallback to historical external mid when quotes disappear, and refrains without quoting into a vacuum.
+30. `SelfTradeRegressionTest.SimultaneousQuoteReplacementNoSelfTrade` — Replicates quote jump scenario where new bid crosses old resting ask, verifying two-pass cancel-first execution and STP prevent self-trading.
+31. `SimulationSeed42RegressionTest.ZeroSelfTradesAndInventoryAdherence` — Verifies 5000-event seed-42 run has 0 self-trades and never breaches inventory limit.
 
-### Python Test Suite (3 Tests, 100% Passing)
+### Python Test Suite (4 Tests, 100% Passing)
 1. `TestAnalyzeSimulation.test_standard_metrics` — Verifies P&L, fees, inventory, fill ratio, and peak-to-trough drawdown on known test vectors.
 2. `TestAnalyzeSimulation.test_empty_trades_edge_case` — Verifies graceful handling of empty `trades.csv` (0 trades).
 3. `TestAnalyzeSimulation.test_zero_volatility_edge_case` — Verifies zero price volatility produces zero drawdown and flat P&L without division-by-zero errors.
+4. `TestAnalyzeSimulation.test_configured_inventory_limit` — Verifies dynamic retrieval of configured inventory limit from `snapshots.csv` and chart generation.
 
 ---
 

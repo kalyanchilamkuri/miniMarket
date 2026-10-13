@@ -120,5 +120,32 @@ class TestAnalyzeSimulation(unittest.TestCase):
         self.assertEqual(res["max_abs_inventory"], 0)
         self.assertEqual(res["final_pnl_dollars"], 0.0)
 
+    def test_configured_inventory_limit(self):
+        snapshots_data = {
+            "timestamp": [0, 10, 20],
+            "best_bid": [9990, 9990, 9990],
+            "best_ask": [10010, 10010, 10010],
+            "mid_price": [10000.0, 10000.0, 10000.0],
+            "spread": [20, 20, 20],
+            "strategy_position": [0, 15, -15],
+            "strategy_cash": [10000000.0, 8500000.0, 11500000.0],
+            "strategy_equity": [10000000.0, 10000000.0, 10000000.0],
+            "strategy_pnl": [0.0, 0.0, 0.0],
+            "cumulative_fees": [0.0, 10.0, 20.0],
+            "strategy_fill_ratio": [0.0, 0.5, 0.5],
+            "strategy_inv_limit": [25, 25, 25]
+        }
+        pd.DataFrame(snapshots_data).to_csv(os.path.join(self.test_dir, "snapshots.csv"), index=False)
+        pd.DataFrame(columns=[
+            "timestamp", "trade_id", "price", "qty", "buy_order_id",
+            "sell_order_id", "buy_client_id", "sell_client_id"
+        ]).to_csv(os.path.join(self.test_dir, "trades.csv"), index=False)
+
+        res = analyze_simulation(self.test_dir)
+        self.assertEqual(res["max_abs_inventory"], 15)
+        self.assertTrue(os.path.exists(os.path.join(self.test_dir, "inventory.png")))
+        self.assertTrue(os.path.exists(os.path.join(self.test_dir, "equity_curve.png")))
+        self.assertTrue(os.path.exists(os.path.join(self.test_dir, "market_microstructure.png")))
+
 if __name__ == '__main__':
     unittest.main()

@@ -64,9 +64,13 @@ public:
     Quantity totalFilledVolume() const { return portfolio_.totalBoughtVolume() + portfolio_.totalSoldVolume(); }
     double fillRatio() const;
 
+    std::optional<double> lastValidExternalMid() const { return last_valid_external_mid_; }
+
 private:
     StrategyConfig config_;
     Portfolio portfolio_;
+
+    std::optional<double> last_valid_external_mid_;
 
     std::optional<OrderId> active_bid_id_;
     std::optional<Price> active_bid_price_;

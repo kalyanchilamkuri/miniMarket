@@ -113,3 +113,54 @@ TEST_F(MatchingTest, FilledOrderCannotBeFilledAgain) {
     EXPECT_FALSE(book.cancelOrder(1));
     EXPECT_FALSE(book.cancelOrder(2));
 }
+
+// Regression Test: Self-trade prevention (STP - Cancel Resting policy)
+TEST_F(MatchingTest, SelfTradePreventionCancelRestingLimitBuy) {
+    // Resting ask by STRATEGY at 100 for 10 shares
+    book.addLimitOrder(1, "STRATEGY", Side::Sell, 100, 10, 1);
+    EXPECT_TRUE(book.hasOrder(1));
+    EXPECT_EQ(book.bestAsk(), 100);
+
+    // Incoming buy by STRATEGY at 100 for 10 shares
+    auto trades = book.addLimitOrder(2, "STRATEGY", Side::Buy, 100, 10, 2);
+
+    // No trade should occur
+    EXPECT_EQ(trades.size(), 0);
+    // Resting ask must be cancelled by the STP policy
+    EXPECT_FALSE(book.hasOrder(1));
+    EXPECT_FALSE(book.bestAsk().has_value());
+    // Incoming buy rests in the book
+    EXPECT_TRUE(book.hasOrder(2));
+    EXPECT_EQ(book.bestBid(), 100);
+    EXPECT_EQ(book.bestBidQty(), 10);
+}
+
+TEST_F(MatchingTest, SelfTradePreventionCancelRestingLimitSell) {
+    // Resting bid by STRATEGY at 100 for 10 shares
+    book.addLimitOrder(1, "STRATEGY", Side::Buy, 100, 10, 1);
+    EXPECT_TRUE(book.hasOrder(1));
+    EXPECT_EQ(book.bestBid(), 100);
+
+    // Incoming sell by STRATEGY at 100 for 10 shares
+    auto trades = book.addLimitOrder(2, "STRATEGY", Side::Sell, 100, 10, 2);
+
+    EXPECT_EQ(trades.size(), 0);
+    EXPECT_FALSE(book.hasOrder(1));
+    EXPECT_FALSE(book.bestBid().has_value());
+    EXPECT_TRUE(book.hasOrder(2));
+    EXPECT_EQ(book.bestAsk(), 100);
+    EXPECT_EQ(book.bestAskQty(), 10);
+}
+
+TEST_F(MatchingTest, SelfTradePreventionCancelRestingMarketOrder) {
+    // Resting ask by STRATEGY at 100 for 10 shares
+    book.addLimitOrder(1, "STRATEGY", Side::Sell, 100, 10, 1);
+
+    // Incoming market buy by STRATEGY for 10 shares
+    auto trades = book.addMarketOrder(2, "STRATEGY", Side::Buy, 10, 2);
+
+    EXPECT_EQ(trades.size(), 0);
+    EXPECT_FALSE(book.hasOrder(1));
+    EXPECT_FALSE(book.bestAsk().has_value());
+    EXPECT_FALSE(book.hasOrder(2)); // Market order unexecuted qty cancels
+}

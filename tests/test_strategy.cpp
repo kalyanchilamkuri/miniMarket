@@ -165,3 +165,133 @@ TEST(SimulationReproducibilityTest, SameSeedProducesIdenticalResults) {
         EXPECT_EQ(t1.sell_order_id, t2.sell_order_id);
     }
 }
+
+// Regression Test: Midpoint fallback when external quotes disappear
+TEST(StrategyMidpointFallbackTest, FallbackToLastValidExternalMidOrRefrain) {
+    StrategyConfig strat_config{"STRATEGY", 20, 5, 0.5, 2};
+    MarketMakingStrategy strategy{strat_config};
+    OrderBook book;
+    OrderId next_id = 1;
+
+    // 1. Initial empty book: No external midpoint ever seen -> Refrain from quoting
+    auto actions = strategy.onMarketUpdate(book, 1, next_id);
+    EXPECT_TRUE(actions.empty());
+    EXPECT_FALSE(strategy.activeBidId().has_value());
+    EXPECT_FALSE(strategy.activeAskId().has_value());
+    EXPECT_FALSE(strategy.lastValidExternalMid().has_value());
+
+    // 2. Add external two-sided quotes: bid 98, ask 102 (mid = 100)
+    book.addLimitOrder(next_id++, "EXT", Side::Buy, 98, 10, 2);
+    book.addLimitOrder(next_id++, "EXT", Side::Sell, 102, 10, 2);
+
+    actions = strategy.onMarketUpdate(book, 2, next_id);
+    EXPECT_EQ(actions.size(), 2);
+    ASSERT_TRUE(strategy.lastValidExternalMid().has_value());
+    EXPECT_DOUBLE_EQ(*strategy.lastValidExternalMid(), 100.0);
+    EXPECT_EQ(strategy.activeBidPrice(), 98);
+    EXPECT_EQ(strategy.activeAskPrice(), 102);
+
+    // 3. External ask disappears (one-sided book: only bid 98)
+    book.cancelOrder(2); // cancel external ask
+    EXPECT_FALSE(book.bestAsk().has_value());
+    EXPECT_FALSE(book.midPrice("STRATEGY").has_value());
+
+    // Strategy must fall back to last_valid_external_mid_ (100.0)
+    actions = strategy.onMarketUpdate(book, 3, next_id);
+    EXPECT_DOUBLE_EQ(*strategy.lastValidExternalMid(), 100.0);
+    EXPECT_EQ(strategy.activeBidPrice(), 98);
+    EXPECT_EQ(strategy.activeAskPrice(), 102);
+
+    // 4. If strategy is reset and only its own quotes remain in book, it must NOT use own quotes
+    strategy.reset();
+    book.clear();
+    // Add only STRATEGY quotes to book
+    book.addLimitOrder(next_id++, "STRATEGY", Side::Buy, 98, 10, 4);
+    book.addLimitOrder(next_id++, "STRATEGY", Side::Sell, 102, 10, 4);
+    EXPECT_TRUE(book.midPrice().has_value()); // book has quotes
+    EXPECT_FALSE(book.midPrice("STRATEGY").has_value()); // but none external!
+
+    actions = strategy.onMarketUpdate(book, 5, next_id);
+    EXPECT_TRUE(actions.empty()); // Must refrain from quoting!
+    EXPECT_FALSE(strategy.lastValidExternalMid().has_value());
+}
+
+// Regression Test: Simultaneous quote replacement & STP preventing timestamp 1264 self-trade
+TEST(SelfTradeRegressionTest, SimultaneousQuoteReplacementNoSelfTrade) {
+    OrderBook book;
+    StrategyConfig strat_config{"STRATEGY", 50, 10, 0.2, 3};
+    MarketMakingStrategy strategy{strat_config};
+
+    // External market starts at bid 9970, ask 9980 (mid = 9975)
+    book.addLimitOrder(1, "EXT", Side::Buy, 9970, 20, 1);
+    book.addLimitOrder(2, "EXT", Side::Sell, 9980, 20, 1);
+
+    OrderId next_id = 100;
+    auto actions = strategy.onMarketUpdate(book, 1, next_id);
+    for (const auto& a : actions) {
+        if (a.action == StrategyActionType::Place) {
+            book.addLimitOrder(a.order_id, strat_config.client_id, a.side, a.price, a.qty, 1);
+        }
+    }
+    // Strategy resting bid is 9972, resting ask is 9978
+    EXPECT_TRUE(strategy.activeAskId().has_value());
+    OrderId old_ask_id = *strategy.activeAskId();
+    Price old_ask_price = *strategy.activeAskPrice();
+    EXPECT_EQ(old_ask_price, 9978);
+    EXPECT_TRUE(book.hasOrder(old_ask_id));
+
+    // Sudden external market jump up to bid 9985, ask 9995 (mid = 9990)
+    book.cancelOrder(1);
+    book.cancelOrder(2);
+    book.addLimitOrder(3, "EXT", Side::Buy, 9985, 20, 2);
+    book.addLimitOrder(4, "EXT", Side::Sell, 9995, 20, 2);
+
+    // Strategy updates: new reservation price moves up, new desired bid moves up to ~9987.
+    // If actions were processed without canceling old ask first, new bid (9987) would cross old ask (9978)!
+    actions = strategy.onMarketUpdate(book, 2, next_id);
+
+    std::vector<Trade> trades_executed;
+
+    // Two-pass execution: Pass 1 (cancels) then Pass 2 (places)
+    for (const auto& a : actions) {
+        if (a.action == StrategyActionType::Cancel) {
+            book.cancelOrder(a.order_id);
+            strategy.onOrderCancelled(a.order_id);
+        }
+    }
+    for (const auto& a : actions) {
+        if (a.action == StrategyActionType::Place) {
+            auto tr = book.addLimitOrder(a.order_id, strat_config.client_id, a.side, a.price, a.qty, 2);
+            trades_executed.insert(trades_executed.end(), tr.begin(), tr.end());
+        }
+    }
+
+    // Verify ZERO trades occurred against self
+    EXPECT_EQ(trades_executed.size(), 0);
+    for (const auto& t : trades_executed) {
+        EXPECT_FALSE(t.buy_client_id == "STRATEGY" && t.sell_client_id == "STRATEGY");
+    }
+}
+
+// Regression Test: 5000-event Seed-42 simulation has ZERO self-trades and obeys inventory limits
+TEST(SimulationSeed42RegressionTest, ZeroSelfTradesAndInventoryAdherence) {
+    SimulationConfig config;
+    config.seed = 42;
+    config.num_events = 5000;
+    config.strategy_config.inventory_limit = 50;
+
+    Simulator sim(config);
+    auto stats = sim.run();
+
+    // Verify absolutely zero wash trades occurred in the entire simulation
+    size_t self_trade_count = 0;
+    for (const auto& t : sim.allTrades()) {
+        if (t.buy_client_id == "STRATEGY" && t.sell_client_id == "STRATEGY") {
+            self_trade_count++;
+        }
+    }
+    EXPECT_EQ(self_trade_count, 0) << "Found " << self_trade_count << " self-trades!";
+
+    // Verify inventory limit was never breached at any event step
+    EXPECT_LE(stats.strategy_max_abs_inventory, config.strategy_config.inventory_limit);
+}

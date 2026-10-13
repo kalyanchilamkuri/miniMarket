@@ -148,7 +148,10 @@ def analyze_simulation(data_dir: str):
     ax.plot(time_steps, inventory_series, color='#ff7f0e', linewidth=1.4, label='Strategy Inventory (shares)')
     ax.axhline(0, color='black', linestyle='-', linewidth=0.8, alpha=0.7)
 
-    inv_limit = max(50, int(max_abs_inventory))
+    if 'strategy_inv_limit' in snaps_df.columns and not snaps_df['strategy_inv_limit'].dropna().empty:
+        inv_limit = int(snaps_df['strategy_inv_limit'].iloc[-1])
+    else:
+        inv_limit = 50
     ax.axhline(inv_limit, color='red', linestyle='--', alpha=0.8, label=f'+Limit (+{inv_limit})')
     ax.axhline(-inv_limit, color='red', linestyle='--', alpha=0.8, label=f'-Limit (-{inv_limit})')
 

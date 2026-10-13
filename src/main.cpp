@@ -73,6 +73,10 @@ int main(int argc, char* argv[]) {
               << "  Sold Volume        : " << stats.strategy_sold_volume << " shares\n"
               << "  Final Inventory    : " << stats.strategy_final_inventory << " shares (limit: "
               << config.strategy_config.inventory_limit << ")\n"
+              << "  Max Abs Inventory  : " << stats.strategy_max_abs_inventory << " shares (limit: "
+              << config.strategy_config.inventory_limit << ")\n"
+              << "  Max Drawdown       : $" << std::fixed << std::setprecision(2)
+              << (stats.strategy_max_drawdown / 100.0) << " (" << stats.strategy_max_drawdown << " cents)\n"
               << "  Cumulative Fees    : $" << std::fixed << std::setprecision(2)
               << (stats.strategy_cumulative_fees / 100.0) << " (" << stats.strategy_cumulative_fees << " cents)\n"
               << "  Final Net P&L      : $" << std::fixed << std::setprecision(2)

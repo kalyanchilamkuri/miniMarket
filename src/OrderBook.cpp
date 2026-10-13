@@ -73,6 +73,17 @@ std::vector<Trade> OrderBook::matchLimitBuy(Order incoming) {
         LimitLevel& level = best_ask_it->second;
         while (incoming.openQty() > 0 && !level.orders.empty()) {
             Order& resting = level.orders.front();
+
+            // Self-Trade Prevention (STP - Cancel Resting policy):
+            // Prevent wash trading between orders from the same entity.
+            // Cancels the stale resting quote and allows the incoming order to continue matching.
+            if (!incoming.clientId().empty() && incoming.clientId() == resting.clientId()) {
+                order_map_.erase(resting.id());
+                level.total_volume -= resting.openQty();
+                level.orders.pop_front();
+                continue;
+            }
+
             Quantity match_qty = std::min(incoming.openQty(), resting.openQty());
 
             // Execution price is the resting order's price
@@ -131,6 +142,17 @@ std::vector<Trade> OrderBook::matchLimitSell(Order incoming) {
         LimitLevel& level = best_bid_it->second;
         while (incoming.openQty() > 0 && !level.orders.empty()) {
             Order& resting = level.orders.front();
+
+            // Self-Trade Prevention (STP - Cancel Resting policy):
+            // If incoming order would match against resting order from same client,
+            // cancel the resting order to prevent wash trading.
+            if (!incoming.clientId().empty() && incoming.clientId() == resting.clientId()) {
+                order_map_.erase(resting.id());
+                level.total_volume -= resting.openQty();
+                level.orders.pop_front();
+                continue;
+            }
+
             Quantity match_qty = std::min(incoming.openQty(), resting.openQty());
 
             // Execution price is the resting order's price
@@ -183,6 +205,15 @@ std::vector<Trade> OrderBook::matchMarketBuy(Order incoming) {
 
         while (incoming.openQty() > 0 && !level.orders.empty()) {
             Order& resting = level.orders.front();
+
+            // Self-Trade Prevention (STP - Cancel Resting policy)
+            if (!incoming.clientId().empty() && incoming.clientId() == resting.clientId()) {
+                order_map_.erase(resting.id());
+                level.total_volume -= resting.openQty();
+                level.orders.pop_front();
+                continue;
+            }
+
             Quantity match_qty = std::min(incoming.openQty(), resting.openQty());
 
             Trade trade{
@@ -225,6 +256,15 @@ std::vector<Trade> OrderBook::matchMarketSell(Order incoming) {
 
         while (incoming.openQty() > 0 && !level.orders.empty()) {
             Order& resting = level.orders.front();
+
+            // Self-Trade Prevention (STP - Cancel Resting policy)
+            if (!incoming.clientId().empty() && incoming.clientId() == resting.clientId()) {
+                order_map_.erase(resting.id());
+                level.total_volume -= resting.openQty();
+                level.orders.pop_front();
+                continue;
+            }
+
             Quantity match_qty = std::min(incoming.openQty(), resting.openQty());
 
             Trade trade{

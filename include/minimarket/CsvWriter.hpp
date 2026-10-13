@@ -20,6 +20,7 @@ struct MarketSnapshotRecord {
     double strategy_pnl{0.0};
     double cumulative_fees{0.0};
     double strategy_fill_ratio{0.0};
+    Quantity strategy_inv_limit{50};
 };
 
 class CsvWriter {
@@ -47,7 +48,7 @@ public:
         if (!file.is_open()) return false;
 
         file << std::fixed << std::setprecision(4);
-        file << "timestamp,best_bid,best_ask,mid_price,spread,strategy_position,strategy_cash,strategy_equity,strategy_pnl,cumulative_fees,strategy_fill_ratio\n";
+        file << "timestamp,best_bid,best_ask,mid_price,spread,strategy_position,strategy_cash,strategy_equity,strategy_pnl,cumulative_fees,strategy_fill_ratio,strategy_inv_limit\n";
         for (const auto& s : snapshots) {
             file << s.timestamp << ","
                  << s.best_bid << ","
@@ -59,7 +60,8 @@ public:
                  << s.strategy_equity << ","
                  << s.strategy_pnl << ","
                  << s.cumulative_fees << ","
-                 << s.strategy_fill_ratio << "\n";
+                 << s.strategy_fill_ratio << ","
+                 << s.strategy_inv_limit << "\n";
         }
         return true;
     }

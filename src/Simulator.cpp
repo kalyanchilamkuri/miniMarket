@@ -40,11 +40,18 @@ void Simulator::handleTrades(const std::vector<Trade>& trades) {
 
 void Simulator::processStrategyActions() {
     auto actions = strategy_.onMarketUpdate(book_, current_time_, next_order_id_);
+
+    // Pass 1: Process all cancellations first so stale resting quotes are cleared
     for (const auto& action : actions) {
         if (action.action == StrategyActionType::Cancel) {
             book_.cancelOrder(action.order_id);
             strategy_.onOrderCancelled(action.order_id);
-        } else if (action.action == StrategyActionType::Place) {
+        }
+    }
+
+    // Pass 2: Place all new quote orders
+    for (const auto& action : actions) {
+        if (action.action == StrategyActionType::Place) {
             auto trades = book_.addLimitOrder(action.order_id,
                                               config_.strategy_config.client_id,
                                               action.side,
@@ -78,6 +85,7 @@ void Simulator::takeSnapshot() {
     record.strategy_pnl = port.netPnL(mid);
     record.cumulative_fees = port.cumulativeFees();
     record.strategy_fill_ratio = strategy_.fillRatio();
+    record.strategy_inv_limit = config_.strategy_config.inventory_limit;
 
     snapshots_.push_back(record);
 }
@@ -95,6 +103,11 @@ SimulationStats Simulator::run() {
 
     seedInitialBook();
     takeSnapshot();
+
+    Quantity max_abs_inventory = 0;
+    double initial_mark = static_cast<double>(config_.initial_reference_price);
+    double peak_equity = strategy_.portfolio().equity(initial_mark);
+    double max_drawdown = 0.0;
 
     std::discrete_distribution<int> price_jump_dist({15, 70, 15}); // -1, 0, +1
     std::discrete_distribution<int> event_dist({55, 30, 15});      // Limit, Market, Cancel
@@ -152,7 +165,24 @@ SimulationStats Simulator::run() {
         // 3. Strategy observation & order placement
         processStrategyActions();
 
-        // 4. Periodic snapshot
+        // 4. Continuous event-level risk metrics tracking
+        const auto& current_port = strategy_.portfolio();
+        Quantity current_abs_inv = std::abs(current_port.position());
+        if (current_abs_inv > max_abs_inventory) {
+            max_abs_inventory = current_abs_inv;
+        }
+
+        double current_mark = book_.midPrice().value_or(current_port.lastMarkPrice());
+        double current_equity = current_port.equity(current_mark);
+        if (current_equity > peak_equity) {
+            peak_equity = current_equity;
+        }
+        double dd = peak_equity - current_equity;
+        if (dd > max_drawdown) {
+            max_drawdown = dd;
+        }
+
+        // 5. Periodic snapshot
         if (step % config_.snapshot_interval == 0 || step == config_.num_events) {
             takeSnapshot();
         }
@@ -168,6 +198,8 @@ SimulationStats Simulator::run() {
     stats.strategy_bought_volume = port.totalBoughtVolume();
     stats.strategy_sold_volume = port.totalSoldVolume();
     stats.strategy_final_inventory = port.position();
+    stats.strategy_max_abs_inventory = max_abs_inventory;
+    stats.strategy_max_drawdown = max_drawdown;
     stats.strategy_final_cash = port.cash();
     stats.strategy_final_equity = port.equity(mark);
     stats.strategy_final_pnl = port.netPnL(mark);

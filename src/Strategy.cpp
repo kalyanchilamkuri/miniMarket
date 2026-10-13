@@ -10,6 +10,7 @@ MarketMakingStrategy::MarketMakingStrategy(StrategyConfig config, Portfolio::Con
 
 void MarketMakingStrategy::reset() {
     portfolio_.reset();
+    last_valid_external_mid_ = std::nullopt;
     active_bid_id_ = std::nullopt;
     active_bid_price_ = std::nullopt;
     active_bid_qty_ = std::nullopt;
@@ -71,14 +72,30 @@ std::vector<StrategyAction> MarketMakingStrategy::onMarketUpdate(const OrderBook
                                                                 OrderId& next_order_id) {
     std::vector<StrategyAction> actions;
 
-    // Midpoint observation: anchor to external market liquidity (excluding own quotes)
-    // to avoid self-referential midpoint bias and quote sticking
+    // Midpoint observation: anchor strictly to external market liquidity (excluding own quotes)
+    // to avoid self-referential midpoint bias and quote sticking.
+    // If external two-sided quotes are missing, fall back to last_valid_external_mid_.
+    // If no external midpoint is available, refrain from quoting and cancel active quotes.
     auto opt_mid = book.midPrice(config_.client_id);
-    if (!opt_mid.has_value()) {
-        opt_mid = book.midPrice();
-    }
-    if (!opt_mid.has_value()) {
-        // No observable midpoint from both sides of the book
+    if (opt_mid.has_value()) {
+        last_valid_external_mid_ = opt_mid;
+    } else if (last_valid_external_mid_.has_value()) {
+        opt_mid = last_valid_external_mid_;
+    } else {
+        // Neither external midpoint nor historical external midpoint exists:
+        // Refrain from quoting and cancel any active quotes to prevent quoting into a vacuum.
+        if (active_bid_id_.has_value()) {
+            actions.push_back({StrategyActionType::Cancel, *active_bid_id_, Side::Buy, 0, 0});
+            active_bid_id_ = std::nullopt;
+            active_bid_price_ = std::nullopt;
+            active_bid_qty_ = std::nullopt;
+        }
+        if (active_ask_id_.has_value()) {
+            actions.push_back({StrategyActionType::Cancel, *active_ask_id_, Side::Sell, 0, 0});
+            active_ask_id_ = std::nullopt;
+            active_ask_price_ = std::nullopt;
+            active_ask_qty_ = std::nullopt;
+        }
         return actions;
     }
 

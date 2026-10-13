@@ -28,6 +28,8 @@ struct SimulationStats {
     Quantity strategy_bought_volume{0};
     Quantity strategy_sold_volume{0};
     Quantity strategy_final_inventory{0};
+    Quantity strategy_max_abs_inventory{0};
+    double strategy_max_drawdown{0.0};
     double strategy_final_cash{0.0};
     double strategy_final_equity{0.0};
     double strategy_final_pnl{0.0};
